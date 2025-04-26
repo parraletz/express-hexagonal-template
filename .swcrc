@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/swcrc",
+  "jsc": {
+    "parser": {
+      "syntax": "typescript",
+      "tsx": false,
+      "decorators": true,
+      "dynamicImport": true
+    },
+    "transform": {
+      "legacyDecorator": true,
+      "decoratorMetadata": true
+    },
+    "target": "es2022",
+    "keepClassNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@domain/*": ["src/domain/*"],
+      "@application/*": ["src/application/*"],
+      "@infrastructure/*": ["src/infrastructure/*"],
+      "@models/*" : ["src/domain/models/*"],
+      "@repositories/*" : ["src/domain/repositories/*"],
+      "@services/*" : ["src/application/services/*"],
+      "@controllers/*" : ["src/infrastructure/controllers/*"],
+      "@routes/*" : ["src/infrastructure/routes/*"],
+      "@middlewares/*" : ["src/infrastructure/middlewares/*"],
+      "@config/*" : ["src/infrastructure/config/*"],
+      "@utils/*" : ["src/infrastructure/utils/*"],
+      "@dtos/*" : ["src/infrastructure/dtos/*"],
+    }
+  },
+  "module": {
+    "type": "commonjs"
+  },
+  "sourceMaps": true,
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".git"
+  ]
+}
