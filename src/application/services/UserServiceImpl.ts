@@ -1,4 +1,5 @@
 import { User, UserEntity } from '@domain/models/User'
+import { CacheService } from '@domain/ports/cache/CacheService'
 import { UserRepository } from '@domain/ports/repositories/UserRepository'
 import { CreateUserDTO, UpdateUserDTO, UserService } from '@domain/ports/services/UserService'
 import { Logger } from '@infrastructure/config/logger'
@@ -9,7 +10,8 @@ import { inject, injectable } from 'inversify'
 export class UserServiceImpl implements UserService {
   constructor(
     @inject(TYPES.UserRepository) private userRepository: UserRepository,
-    @inject(TYPES.Logger) private logger: Logger
+    @inject(TYPES.Logger) private logger: Logger,
+    @inject(TYPES.CacheService) private cacheService: CacheService
   ) {}
 
   async createUser(userData: CreateUserDTO): Promise<User> {
@@ -26,6 +28,10 @@ export class UserServiceImpl implements UserService {
     })
 
     await this.userRepository.save(user)
+    
+    // Invalidate relevant cache entries
+    this.cacheService.delete('users:all')
+    
     this.logger.info('User created successfully', { userId: user.id })
     return user
   }
@@ -61,6 +67,15 @@ export class UserServiceImpl implements UserService {
       userEntity.update(userData)
       await this.userRepository.update(userEntity)
 
+      // Invalidate cache entries
+      const cacheKey = `user:${id}`
+      await this.cacheService.delete(cacheKey)
+      if (userData.email) {
+        await this.cacheService.delete(`user:email:${userData.email}`)
+        await this.cacheService.delete(`user:email:${user.email}`)
+      }
+      await this.cacheService.delete('users:all')
+      
       this.logger.info('User updated successfully', { userId: id })
       return userEntity
     }
@@ -68,33 +83,84 @@ export class UserServiceImpl implements UserService {
     user.update(userData)
     await this.userRepository.update(user)
 
+    // Invalidate cache entries
+    const cacheKey = `user:${id}`
+    await this.cacheService.delete(cacheKey)
+    if (userData.email) {
+      await this.cacheService.delete(`user:email:${userData.email}`)
+      await this.cacheService.delete(`user:email:${user.email}`)
+    }
+    await this.cacheService.delete('users:all')
+    
     this.logger.info('User updated successfully', { userId: id })
     return user
   }
 
   async getUserById(id: string): Promise<User | null> {
+    // Try to get from cache first
+    const cacheKey = `user:${id}`
+    const cachedUser = await this.cacheService.get<User>(cacheKey)
+    
+    if (cachedUser) {
+      this.logger.debug('User retrieved from cache', { userId: id })
+      return cachedUser
+    }
+    
+    // If not in cache, get from repository
     const user = await this.userRepository.findById(id)
-
+    
     if (!user) {
       this.logger.debug('User not found by ID', { userId: id })
+      return null
     }
-
+    
+    // Store in cache for future requests with 1 hour TTL
+    await this.cacheService.set(cacheKey, user, 3600)
+    
     return user
   }
 
   async getUserByEmail(email: string): Promise<User | null> {
+    // Try to get from cache first
+    const cacheKey = `user:email:${email}`
+    const cachedUser = await this.cacheService.get<User>(cacheKey)
+    
+    if (cachedUser) {
+      this.logger.debug('User retrieved from cache by email', { email })
+      return cachedUser
+    }
+    
+    // If not in cache, get from repository
     const user = await this.userRepository.findByEmail(email)
-
+    
     if (!user) {
       this.logger.debug('User not found by email', { email })
+      return null
     }
-
+    
+    // Store in cache for future requests with 1 hour TTL
+    await this.cacheService.set(cacheKey, user, 3600)
+    
     return user
   }
 
   async getAllUsers(): Promise<User[]> {
+    // Try to get from cache first
+    const cacheKey = 'users:all'
+    const cachedUsers = await this.cacheService.get<User[]>(cacheKey)
+    
+    if (cachedUsers) {
+      this.logger.debug('All users retrieved from cache', { count: cachedUsers.length })
+      return cachedUsers
+    }
+    
+    // If not in cache, get from repository
     const users = await this.userRepository.findAll()
-    this.logger.debug('Retrieved all users', { count: users.length })
+    
+    // Store in cache for future requests with 5 minutes TTL (shorter for collections)
+    await this.cacheService.set(cacheKey, users, 300)
+    
+    this.logger.debug('Retrieved all users from repository', { count: users.length })
     return users
   }
 
@@ -107,6 +173,12 @@ export class UserServiceImpl implements UserService {
     }
 
     await this.userRepository.delete(id)
+    
+    // Invalidate cache entries
+    await this.cacheService.delete(`user:${id}`)
+    await this.cacheService.delete(`user:email:${user.email}`)
+    await this.cacheService.delete('users:all')
+    
     this.logger.info('User deleted successfully', { userId: id })
     return true
   }

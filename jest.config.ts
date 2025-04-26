@@ -6,6 +6,7 @@ const config: Config = {
   testMatch: ['<rootDir>/tests/**/*.test.ts'],
   moduleFileExtensions: ['ts', 'js', 'json', 'node'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.d.ts', '!src/**/*.test.ts'],
+  setupFilesAfterEnv: ['<rootDir>/tests/setupTests.ts'],
   coverageDirectory: 'tests/coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   moduleNameMapper: {

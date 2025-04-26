@@ -1,3 +1,224 @@
+## Caching with Redis
+
+This boilerplate can be extended with Redis for efficient caching to improve performance.
+
+### Redis Integration
+
+1. Install the required package:
+```bash
+npm install redis
+```
+
+2. Create a Redis cache service implementation:
+
+```typescript
+// src/infrastructure/cache/RedisCache.ts
+import { inject, injectable } from 'inversify';
+import { createClient, RedisClientType } from 'redis';
+import { Logger } from '@infrastructure/config/logger';
+import { TYPES } from '@infrastructure/config/types';
+import { CacheService } from '@domain/ports/cache/CacheService';
+
+@injectable()
+export class RedisCache implements CacheService {
+  private client: RedisClientType;
+  private readonly defaultTtl: number = 3600; // 1 hour in seconds
+
+  constructor(@inject(TYPES.Logger) private logger: Logger) {
+    this.client = createClient({
+      url: process.env.REDIS_URL || 'redis://localhost:6379'
+    });
+
+    this.client.on('error', (err) => {
+      this.logger.error('Redis client error', { error: err });
+    });
+
+    this.connect();
+  }
+
+  private async connect(): Promise<void> {
+    try {
+      await this.client.connect();
+      this.logger.info('Redis connected successfully');
+    } catch (error) {
+      this.logger.error('Redis connection error', { error });
+    }
+  }
+
+  async get<T>(key: string): Promise<T | null> {
+    try {
+      const data = await this.client.get(key);
+      if (!data) return null;
+      
+      return JSON.parse(data) as T;
+    } catch (error) {
+      this.logger.error('Redis get error', { error, key });
+      return null;
+    }
+  }
+
+  async set<T>(key: string, value: T, ttl?: number): Promise<boolean> {
+    try {
+      const expiry = ttl || this.defaultTtl;
+      await this.client.setEx(key, expiry, JSON.stringify(value));
+      return true;
+    } catch (error) {
+      this.logger.error('Redis set error', { error, key });
+      return false;
+    }
+  }
+
+  async delete(key: string): Promise<boolean> {
+    try {
+      await this.client.del(key);
+      return true;
+    } catch (error) {
+      this.logger.error('Redis delete error', { error, key });
+      return false;
+    }
+  }
+
+  async has(key: string): Promise<boolean> {
+    try {
+      return await this.client.exists(key) === 1;
+    } catch (error) {
+      this.logger.error('Redis exists error', { error, key });
+      return false;
+    }
+  }
+
+  async flush(): Promise<void> {
+    try {
+      await this.client.flushAll();
+    } catch (error) {
+      this.logger.error('Redis flush error', { error });
+    }
+  }
+}
+```
+
+3. Define the cache service interface:
+
+```typescript
+// src/domain/ports/cache/CacheService.ts
+export interface CacheService {
+  get<T>(key: string): Promise<T | null>;
+  set<T>(key: string, value: T, ttl?: number): Promise<boolean>;
+  delete(key: string): Promise<boolean>;
+  has(key: string): Promise<boolean>;
+  flush(): Promise<void>;
+}
+```
+
+4. Update your inversify configuration to use Redis cache:
+
+```typescript
+// In src/infrastructure/config/inversify.config.ts
+import { CacheService } from '@domain/ports/cache/CacheService';
+import { RedisCache } from '@infrastructure/cache/RedisCache';
+
+// Register the cache service
+container.bind<CacheService>(TYPES.CacheService).to(RedisCache).inSingletonScope();
+```
+
+5. Update the TYPES constant to include CacheService:
+
+```typescript
+// In src/infrastructure/config/types.ts
+export const TYPES = {
+  // Add this to your existing types
+  CacheService: Symbol.for('CacheService'),
+};
+```
+
+### Using Redis Cache in Services
+
+Here's how to implement caching in your services:
+
+```typescript
+// In your service implementation
+import { inject, injectable } from 'inversify';
+import { CacheService } from '@domain/ports/cache/CacheService';
+import { TYPES } from '@infrastructure/config/types';
+
+@injectable()
+export class UserServiceImpl implements UserService {
+  constructor(
+    @inject(TYPES.UserRepository) private userRepository: UserRepository,
+    @inject(TYPES.Logger) private logger: Logger,
+    @inject(TYPES.CacheService) private cacheService: CacheService
+  ) {}
+
+  async getUserById(id: string): Promise<User | null> {
+    // Try to get from cache first
+    const cacheKey = `user:${id}`;
+    const cachedUser = await this.cacheService.get<User>(cacheKey);
+    
+    if (cachedUser) {
+      this.logger.debug('User retrieved from cache', { userId: id });
+      return cachedUser;
+    }
+    
+    // If not in cache, get from repository
+    const user = await this.userRepository.findById(id);
+    
+    if (user) {
+      // Store in cache for future requests with 1 hour TTL
+      await this.cacheService.set(cacheKey, user, 3600);
+    }
+    
+    return user;
+  }
+
+  async updateUser(id: string, userData: UpdateUserDTO): Promise<User | null> {
+    // Existing update logic...
+    
+    // After successful update, invalidate the cache
+    const cacheKey = `user:${id}`;
+    await this.cacheService.delete(cacheKey);
+    
+    return updatedUser;
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    // Existing delete logic...
+    
+    // After successful deletion, invalidate the cache
+    const cacheKey = `user:${id}`;
+    await this.cacheService.delete(cacheKey);
+    
+    return true;
+  }
+}
+```
+
+### Environment Configuration
+
+Add the following to your `.env` file:
+
+```
+REDIS_URL=redis://localhost:6379
+REDIS_TTL=3600  # Default cache TTL in seconds
+```
+
+### Cache Patterns
+
+With Redis cache integration, you can implement various caching patterns:
+
+- **Cache-Aside Pattern**: Used in the example above - first check the cache, then the database
+- **Write-Through Pattern**: Update both cache and database in the same operation
+- **Cache Invalidation**: Remove stale cache entries when data changes
+- **Bulk Prefetching**: Load and cache multiple related items at once
+
+### Cache Considerations
+
+When implementing caching, consider these best practices:
+
+- **TTL Management**: Set appropriate time-to-live values based on data volatility
+- **Key Consistency**: Use consistent key naming patterns for easier management
+- **Cache Invalidation**: Always invalidate cache when updating or deleting data
+- **Cache Size**: Monitor Redis memory usage in production environments
+- **Fallback Mechanism**: Handle cache failures gracefully by falling back to the repository
 # Express Hexagonal Architecture Boilerplate
 
 A production-ready Express.js boilerplate with TypeScript implementing Hexagonal (Ports & Adapters) Architecture, designed for building scalable and maintainable web services.

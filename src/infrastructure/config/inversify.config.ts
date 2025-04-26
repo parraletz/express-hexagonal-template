@@ -11,9 +11,11 @@ import { SwaggerConfig } from './swagger';
 import { UserRepository } from '@domain/ports/repositories/UserRepository';
 import { UserService } from '@domain/ports/services/UserService';
 import { UserServiceImpl } from '@application/services/UserServiceImpl';
+import { CacheService } from '@domain/ports/cache/CacheService';
 
 // Repositories
 import { InMemoryUserRepository } from '@infrastructure/repositories/memory/InMemoryUserRepository';
+import { RedisCache } from '@infrastructure/cache/RedisCache';
 
 // Controllers - Important to import these so they are registered
 import '@infrastructure/controllers/api/HomeController';
@@ -26,6 +28,7 @@ const container = new Container();
 container.bind<Logger>(TYPES.Logger).to(Logger).inSingletonScope();
 container.bind<App>(TYPES.App).to(App).inSingletonScope();
 container.bind<SwaggerConfig>(TYPES.SwaggerConfig).to(SwaggerConfig).inSingletonScope();
+container.bind<CacheService>(TYPES.CacheService).to(RedisCache).inSingletonScope();
 
 // Repositories
 container.bind<UserRepository>(TYPES.UserRepository).to(InMemoryUserRepository).inSingletonScope();
