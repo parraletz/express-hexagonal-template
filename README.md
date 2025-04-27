@@ -291,3 +291,109 @@ describe('UserService', () => {
 - [Prisma Examples](https://github.com/prisma/prisma-examples)
 - [Prisma Schema Reference](https://www.prisma.io/docs/reference/api-reference/prisma-schema-reference)
 - [Prisma Client API](https://www.prisma.io/docs/reference/api-reference/prisma-client-reference)
+
+## Redis Cache Management
+
+This boilerplate includes a robust Redis caching implementation with automatic reconnection handling and health monitoring.
+
+### Redis Configuration
+
+The Redis client is configured with the following features:
+
+1. **Connection Settings**:
+
+   - Default URL: `redis://localhost:6379`
+   - Configurable via `REDIS_URL` environment variable
+   - Connection timeout handling
+   - Automatic reconnection
+
+2. **Reconnection Strategy**:
+
+   - Initial connection attempts: 3 tries
+   - Retry delay between attempts: 5 seconds
+   - After max attempts: Enters periodic reconnection mode
+   - Periodic reconnection interval: 30 seconds
+
+3. **Health Monitoring**:
+   - Endpoint: `/health` or `/healthz`
+   - Performs actual Redis operations to verify health
+   - Returns detailed status information
+
+### Health Check Response Examples
+
+When Redis is healthy:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2024-03-21T12:34:56.789Z",
+  "uptime": 123.456,
+  "redis": {
+    "status": "ok",
+    "message": "Redis is working properly"
+  }
+}
+```
+
+When Redis is unavailable:
+
+```json
+{
+  "status": "error",
+  "timestamp": "2024-03-21T12:34:56.789Z",
+  "uptime": 123.456,
+  "redis": {
+    "status": "error",
+    "message": "Failed to connect to Redis"
+  }
+}
+```
+
+### Redis Connection States
+
+The Redis client can be in one of these states:
+
+1. **Connected**: Normal operation, all cache operations available
+2. **Disconnected (Attempting Initial Reconnection)**:
+   - Making initial reconnection attempts
+   - Maximum 3 attempts with 5-second delays
+3. **Disconnected (Periodic Reconnection)**:
+   - After initial attempts fail
+   - Tries to reconnect every 30 seconds
+   - Continues until connection is restored
+
+### Automatic Recovery
+
+The system is designed to automatically recover from Redis failures:
+
+1. When Redis becomes unavailable:
+
+   - Marks cache as unavailable
+   - Returns fallback values for all cache operations
+   - Starts reconnection process
+   - Health check reports error status
+
+2. When Redis becomes available again:
+   - Automatically reconnects
+   - Restores cache operations
+   - Health check returns to normal
+   - No manual intervention required
+
+### Cache Operations During Outage
+
+During a Redis outage, the system behaves as follows:
+
+- `get()`: Returns `null`
+- `set()`: Returns `false`
+- `delete()`: Returns `false`
+- `has()`: Returns `false`
+- `flush()`: No operation
+
+This ensures your application continues to function even when Redis is temporarily unavailable.
+
+### Environment Variables
+
+```env
+# Redis Configuration
+REDIS_URL=redis://localhost:6379  # Default Redis connection URL
+```

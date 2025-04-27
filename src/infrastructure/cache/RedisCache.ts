@@ -12,44 +12,73 @@ export class RedisCache implements CacheService {
   private connectionAttempts: number = 0
   private readonly maxConnectionAttempts: number = 3
   private readonly connectionRetryDelay: number = 5000 // 5 seconds
+  private readonly reconnectionInterval: number = 30000 // 30 seconds
+  private reconnectionTimer: NodeJS.Timeout | null = null
 
   constructor(@inject(TYPES.Logger) private logger: Logger) {
-    this.client = createClient({
+    this.client = this.createRedisClient()
+    this.setupEventListeners()
+    this.connect()
+  }
+
+  private createRedisClient(): RedisClientType {
+    return createClient({
       url: process.env.REDIS_URL || 'redis://localhost:6379'
     })
+  }
 
+  private setupEventListeners(): void {
     this.client.on('error', err => {
-      // Only log as error if we were previously connected
       if (this.isAvailable) {
         this.logger.error('Redis client error', { error: err })
         this.isAvailable = false
-        // Try to reconnect once if we lose an established connection
-        if (this.connectionAttempts < this.maxConnectionAttempts) {
-          this.connectionAttempts = 0
-          setTimeout(() => this.connect(), this.connectionRetryDelay)
-        }
+        this.startReconnection()
       }
     })
 
     this.client.on('connect', () => {
       this.isAvailable = true
       this.connectionAttempts = 0
+      this.stopReconnectionTimer()
       this.logger.info('Redis connected successfully')
     })
+  }
 
-    // Initial connection attempt
-    this.connect()
+  private startReconnection(): void {
+    if (!this.reconnectionTimer) {
+      this.reconnectionTimer = setInterval(() => {
+        if (!this.isAvailable) {
+          this.logger.info('Attempting to reconnect to Redis...')
+          this.connectionAttempts = 0
+          this.connect()
+        }
+      }, this.reconnectionInterval)
+    }
+  }
+
+  private stopReconnectionTimer(): void {
+    if (this.reconnectionTimer) {
+      clearInterval(this.reconnectionTimer)
+      this.reconnectionTimer = null
+    }
   }
 
   private async connect(): Promise<void> {
     if (this.connectionAttempts >= this.maxConnectionAttempts) {
-      this.logger.warn('Max Redis connection attempts reached, falling back to no-cache mode')
-      await this.disconnect()
+      this.logger.warn('Max Redis connection attempts reached, will retry later')
+      this.startReconnection()
       return
     }
 
     try {
       this.connectionAttempts++
+
+      // Create a new client if the current one is closed
+      if (this.client.isOpen === false) {
+        this.client = this.createRedisClient()
+        this.setupEventListeners()
+      }
+
       await this.client.connect()
       this.isAvailable = true
       this.logger.info('Redis connected successfully')
@@ -63,14 +92,15 @@ export class RedisCache implements CacheService {
         )
         setTimeout(() => this.connect(), this.connectionRetryDelay)
       } else {
-        this.logger.warn('Max Redis connection attempts reached, falling back to no-cache mode')
-        await this.disconnect()
+        this.logger.warn('Max Redis connection attempts reached, will retry later')
+        this.startReconnection()
       }
     }
   }
 
   private async disconnect(): Promise<void> {
     try {
+      this.stopReconnectionTimer()
       await this.client.quit()
     } catch (error) {
       // Ignore error on disconnect
