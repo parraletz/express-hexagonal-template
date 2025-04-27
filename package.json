@@ -4,7 +4,8 @@
   "description": "Express.js boilerplate with Hexagonal Architecture for Kubernetes deployments",
   "main": "dist/index.js",
   "scripts": {
-    "build": "swc src -d dist",
+    "clean": "rimraf dist",
+    "build": "pnpm clean && swc src -d dist && mv dist/src/* dist/ && rm -rf dist/src",
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only -r tsconfig-paths/register src/index.ts",
     "test": "jest --coverage",
@@ -19,8 +20,8 @@
     "kubernetes",
     "boilerplate"
   ],
-  "author": "",
-  "license": "MIT",
+  "author": "Alex Parra",
+  "license": "Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License",
   "dependencies": {
     "@godaddy/terminus": "^4.12.1",
     "class-transformer": "^0.5.1",
@@ -68,6 +69,7 @@
     "lint-staged": "^15.5.1",
     "pino-pretty": "^10.3.1",
     "prettier": "^3.5.3",
+    "rimraf": "^6.0.1",
     "semantic-release": "^24.2.3",
     "supertest": "^7.1.0",
     "swc-loader": "^0.2.6",
