@@ -22,7 +22,7 @@ This boilerplate is ideal for:
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
+We welcome contributions! Please see our [Contributing Guide](docs/CONTRIBUTING.md) for details on:
 
 - Commit message conventions
 - Pull request process
