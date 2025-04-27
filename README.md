@@ -20,6 +20,15 @@ This boilerplate is ideal for:
 - Projects that need flexibility in infrastructure choices
 - Teams wanting to maintain high code quality and testability
 
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
+
+- Commit message conventions
+- Pull request process
+- Development setup
+- Code style guidelines
+
 ## Getting Started
 
 1. Clone this repository
