@@ -1,1023 +1,293 @@
-## Caching with Redis
-
-This boilerplate can be extended with Redis for efficient caching to improve performance.
-
-### Redis Integration
-
-1. Install the required package:
-```bash
-npm install redis
-```
-
-2. Create a Redis cache service implementation:
-
-```typescript
-// src/infrastructure/cache/RedisCache.ts
-import { inject, injectable } from 'inversify';
-import { createClient, RedisClientType } from 'redis';
-import { Logger } from '@infrastructure/config/logger';
-import { TYPES } from '@infrastructure/config/types';
-import { CacheService } from '@domain/ports/cache/CacheService';
-
-@injectable()
-export class RedisCache implements CacheService {
-  private client: RedisClientType;
-  private readonly defaultTtl: number = 3600; // 1 hour in seconds
-
-  constructor(@inject(TYPES.Logger) private logger: Logger) {
-    this.client = createClient({
-      url: process.env.REDIS_URL || 'redis://localhost:6379'
-    });
-
-    this.client.on('error', (err) => {
-      this.logger.error('Redis client error', { error: err });
-    });
-
-    this.connect();
-  }
-
-  private async connect(): Promise<void> {
-    try {
-      await this.client.connect();
-      this.logger.info('Redis connected successfully');
-    } catch (error) {
-      this.logger.error('Redis connection error', { error });
-    }
-  }
-
-  async get<T>(key: string): Promise<T | null> {
-    try {
-      const data = await this.client.get(key);
-      if (!data) return null;
-      
-      return JSON.parse(data) as T;
-    } catch (error) {
-      this.logger.error('Redis get error', { error, key });
-      return null;
-    }
-  }
-
-  async set<T>(key: string, value: T, ttl?: number): Promise<boolean> {
-    try {
-      const expiry = ttl || this.defaultTtl;
-      await this.client.setEx(key, expiry, JSON.stringify(value));
-      return true;
-    } catch (error) {
-      this.logger.error('Redis set error', { error, key });
-      return false;
-    }
-  }
-
-  async delete(key: string): Promise<boolean> {
-    try {
-      await this.client.del(key);
-      return true;
-    } catch (error) {
-      this.logger.error('Redis delete error', { error, key });
-      return false;
-    }
-  }
-
-  async has(key: string): Promise<boolean> {
-    try {
-      return await this.client.exists(key) === 1;
-    } catch (error) {
-      this.logger.error('Redis exists error', { error, key });
-      return false;
-    }
-  }
-
-  async flush(): Promise<void> {
-    try {
-      await this.client.flushAll();
-    } catch (error) {
-      this.logger.error('Redis flush error', { error });
-    }
-  }
-}
-```
-
-3. Define the cache service interface:
-
-```typescript
-// src/domain/ports/cache/CacheService.ts
-export interface CacheService {
-  get<T>(key: string): Promise<T | null>;
-  set<T>(key: string, value: T, ttl?: number): Promise<boolean>;
-  delete(key: string): Promise<boolean>;
-  has(key: string): Promise<boolean>;
-  flush(): Promise<void>;
-}
-```
-
-4. Update your inversify configuration to use Redis cache:
-
-```typescript
-// In src/infrastructure/config/inversify.config.ts
-import { CacheService } from '@domain/ports/cache/CacheService';
-import { RedisCache } from '@infrastructure/cache/RedisCache';
-
-// Register the cache service
-container.bind<CacheService>(TYPES.CacheService).to(RedisCache).inSingletonScope();
-```
-
-5. Update the TYPES constant to include CacheService:
-
-```typescript
-// In src/infrastructure/config/types.ts
-export const TYPES = {
-  // Add this to your existing types
-  CacheService: Symbol.for('CacheService'),
-};
-```
-
-### Using Redis Cache in Services
-
-Here's how to implement caching in your services:
-
-```typescript
-// In your service implementation
-import { inject, injectable } from 'inversify';
-import { CacheService } from '@domain/ports/cache/CacheService';
-import { TYPES } from '@infrastructure/config/types';
-
-@injectable()
-export class UserServiceImpl implements UserService {
-  constructor(
-    @inject(TYPES.UserRepository) private userRepository: UserRepository,
-    @inject(TYPES.Logger) private logger: Logger,
-    @inject(TYPES.CacheService) private cacheService: CacheService
-  ) {}
-
-  async getUserById(id: string): Promise<User | null> {
-    // Try to get from cache first
-    const cacheKey = `user:${id}`;
-    const cachedUser = await this.cacheService.get<User>(cacheKey);
-    
-    if (cachedUser) {
-      this.logger.debug('User retrieved from cache', { userId: id });
-      return cachedUser;
-    }
-    
-    // If not in cache, get from repository
-    const user = await this.userRepository.findById(id);
-    
-    if (user) {
-      // Store in cache for future requests with 1 hour TTL
-      await this.cacheService.set(cacheKey, user, 3600);
-    }
-    
-    return user;
-  }
-
-  async updateUser(id: string, userData: UpdateUserDTO): Promise<User | null> {
-    // Existing update logic...
-    
-    // After successful update, invalidate the cache
-    const cacheKey = `user:${id}`;
-    await this.cacheService.delete(cacheKey);
-    
-    return updatedUser;
-  }
-
-  async deleteUser(id: string): Promise<boolean> {
-    // Existing delete logic...
-    
-    // After successful deletion, invalidate the cache
-    const cacheKey = `user:${id}`;
-    await this.cacheService.delete(cacheKey);
-    
-    return true;
-  }
-}
-```
-
-### Environment Configuration
-
-Add the following to your `.env` file:
-
-```
-REDIS_URL=redis://localhost:6379
-REDIS_TTL=3600  # Default cache TTL in seconds
-```
-
-### Cache Patterns
-
-With Redis cache integration, you can implement various caching patterns:
-
-- **Cache-Aside Pattern**: Used in the example above - first check the cache, then the database
-- **Write-Through Pattern**: Update both cache and database in the same operation
-- **Cache Invalidation**: Remove stale cache entries when data changes
-- **Bulk Prefetching**: Load and cache multiple related items at once
-
-### Cache Considerations
-
-When implementing caching, consider these best practices:
-
-- **TTL Management**: Set appropriate time-to-live values based on data volatility
-- **Key Consistency**: Use consistent key naming patterns for easier management
-- **Cache Invalidation**: Always invalidate cache when updating or deleting data
-- **Cache Size**: Monitor Redis memory usage in production environments
-- **Fallback Mechanism**: Handle cache failures gracefully by falling back to the repository
 # Express Hexagonal Architecture Boilerplate
 
-A production-ready Express.js boilerplate with TypeScript implementing Hexagonal (Ports & Adapters) Architecture, designed for building scalable and maintainable web services.
+## Purpose
 
-## What is Hexagonal Architecture?
+This project serves as a robust foundation for building enterprise-grade Node.js applications using Express.js and TypeScript. It implements the Hexagonal Architecture pattern (also known as Ports and Adapters) to create highly maintainable, scalable, and testable applications.
 
-Also known as "Ports and Adapters," Hexagonal Architecture organizes your application into three main layers:
+Key objectives of this boilerplate:
 
-- **Domain Layer**: Contains business logic, entities, and rules that represent your core application concepts
-- **Application Layer**: Implements use cases by coordinating domain objects to perform specific tasks
-- **Infrastructure Layer**: Provides concrete implementations for external interfaces (databases, APIs, UI)
+- **Separation of Concerns**: Clear boundaries between business logic, application services, and infrastructure
+- **Technology Independence**: Easily swap out infrastructure implementations (databases, caches, external services) without affecting core business logic
+- **Testing Simplicity**: Isolated components that can be tested independently
+- **Maintainability**: Organized codebase that's easy to understand and modify
+- **Scalability**: Foundation for building large-scale applications that can evolve over time
+- **Best Practices**: Implementation of industry-standard patterns and practices
 
-The key benefit is that your core business logic remains isolated from external concerns, making your application:
-- More testable with clearer boundaries
-- Easier to maintain and evolve over time
-- Technology-agnostic, allowing you to swap implementations without affecting core functionality
+This boilerplate is ideal for:
 
-## What This Boilerplate Provides
-
-This boilerplate implements a complete foundation for Express.js services with:
-
-1. **Complete Project Structure**: Ready-to-use directory organization following hexagonal principles
-2. **Working API Examples**: User management endpoints with CRUD operations
-3. **High-Performance Logging**: Structured JSON logs with Pino for improved monitoring
-4. **Automatic API Documentation**: Swagger integration for interactive API exploration
-5. **Dependency Injection**: Inversify for clean dependency management
-6. **Infrastructure Independence**: Pluggable repository implementations
-7. **Developer Experience**: Fast compile times with SWC, hot reloading, clear error handling
-
-## Features
-
-- **Hexagonal Architecture**: Clean separation between domain, application, and infrastructure layers
-- **TypeScript**: Type-safe development experience with SWC for fast compilation
-- **Express.js**: Fast, unopinionated web framework
-- **File-based Repository**: Simple JSON file storage for development
-- **Structured Logging**: Pino logger with JSON output format
-- **Dependency Injection**: Inversify for clean dependency management
-- **Validation**: Class-validator for input validation
-- **Caching**: Integrated caching system with TTL support
-- **API Documentation**: OpenAPI/Swagger integration
-- **Testing**: Jest with SWC for fast unit and integration testing
-- **Error Handling**: Centralized error handling
-- **Docker & Kubernetes**: Ready for containerized deployments
-- **Security**: Helmet integration for HTTP security headers
+- Enterprise applications requiring clean architecture
+- Microservices with complex business logic
+- Projects that need flexibility in infrastructure choices
+- Teams wanting to maintain high code quality and testability
 
 ## Getting Started
 
 1. Clone this repository
-2. Install dependencies: `npm install`
+2. Install dependencies: `pnpm install`
 3. Copy `.env.example` to `.env` and configure
-4. Run development server: `npm run dev`
-5. Build for production: `npm run build`
-6. Run production server: `npm start`
+4. Run development server: `pnpm dev`
+5. Build for production: `pnpm build`
+6. Run production server: `pnpm start`
 7. Access Swagger docs at: `http://localhost:3000/api-docs`
 
-## Repository Implementations
+## Database Management with Prisma ORM
 
-The boilerplate currently includes an in-memory repository implementation for development, but you can easily swap it with other database connectors.
+This boilerplate uses Prisma as its primary ORM for database management. Prisma provides type-safe database access, schema migrations, and supports multiple databases including PostgreSQL, MySQL, MariaDB, and MongoDB.
 
-### Using PostgreSQL
+### Setting up Prisma
 
-To implement a PostgreSQL repository:
+1. Install Prisma dependencies:
 
-1. Install required packages:
 ```bash
-npm install pg @types/pg
+pnpm add -D prisma
+pnpm add @prisma/client
 ```
 
-2. Create a PostgreSQL repository implementation:
+2. Initialize Prisma with your database of choice:
 
-```typescript
-// src/infrastructure/repositories/postgres/PostgresUserRepository.ts
-import { inject, injectable } from 'inversify';
-import { Pool } from 'pg';
-import { User, UserEntity } from '@domain/models/User';
-import { UserRepository } from '@domain/ports/repositories/UserRepository';
-import { TYPES } from '@infrastructure/config/types';
-import { Logger } from '@infrastructure/config/logger';
+```bash
+pnpm prisma init --datasource-provider postgresql # or mysql, mongodb, etc.
+```
 
-@injectable()
-export class PostgresUserRepository implements UserRepository {
-  private pool: Pool;
+3. Define your schema in `prisma/schema.prisma`. Here's an example with common models:
 
-  constructor(@inject(TYPES.Logger) private logger: Logger) {
-    this.pool = new Pool({
-      host: process.env.POSTGRES_HOST,
-      port: parseInt(process.env.POSTGRES_PORT || '5432'),
-      database: process.env.POSTGRES_DB,
-      user: process.env.POSTGRES_USER,
-      password: process.env.POSTGRES_PASSWORD,
-    });
-  }
+```prisma
+datasource db {
+  provider = "postgresql" // or "mysql", "mongodb"
+  url      = env("DATABASE_URL")
+}
 
-  async findById(id: string): Promise<User | null> {
-    try {
-      const result = await this.pool.query(
-        'SELECT * FROM users WHERE id = $1',
-        [id]
-      );
+generator client {
+  provider = "prisma-client-js"
+}
 
-      if (result.rows.length === 0) {
-        return null;
-      }
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  posts     Post[]
+  profile   Profile?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
 
-      return this.mapToUser(result.rows[0]);
-    } catch (error) {
-      this.logger.error('Error finding user by ID', { error, userId: id });
-      throw error;
-    }
-  }
+model Post {
+  id        String   @id @default(uuid())
+  title     String
+  content   String
+  published Boolean  @default(false)
+  author    User     @relation(fields: [authorId], references: [id])
+  authorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
 
-  async findByEmail(email: string): Promise<User | null> {
-    try {
-      const result = await this.pool.query(
-        'SELECT * FROM users WHERE email = $1',
-        [email]
-      );
-
-      if (result.rows.length === 0) {
-        return null;
-      }
-
-      return this.mapToUser(result.rows[0]);
-    } catch (error) {
-      this.logger.error('Error finding user by email', { error, email });
-      throw error;
-    }
-  }
-
-  async findAll(): Promise<User[]> {
-    try {
-      const result = await this.pool.query('SELECT * FROM users');
-      return result.rows.map(row => this.mapToUser(row));
-    } catch (error) {
-      this.logger.error('Error finding all users', { error });
-      throw error;
-    }
-  }
-
-  async save(user: User): Promise<void> {
-    try {
-      await this.pool.query(
-        'INSERT INTO users (id, name, email, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)',
-        [user.id, user.name, user.email, user.createdAt, user.updatedAt]
-      );
-    } catch (error) {
-      this.logger.error('Error saving user', { error, userId: user.id });
-      throw error;
-    }
-  }
-
-  async update(user: User): Promise<void> {
-    try {
-      await this.pool.query(
-        'UPDATE users SET name = $1, email = $2, updated_at = $3 WHERE id = $4',
-        [user.name, user.email, user.updatedAt, user.id]
-      );
-    } catch (error) {
-      this.logger.error('Error updating user', { error, userId: user.id });
-      throw error;
-    }
-  }
-
-  async delete(id: string): Promise<void> {
-    try {
-      await this.pool.query('DELETE FROM users WHERE id = $1', [id]);
-    } catch (error) {
-      this.logger.error('Error deleting user', { error, userId: id });
-      throw error;
-    }
-  }
-
-  private mapToUser(row: any): User {
-    return new UserEntity({
-      id: row.id,
-      name: row.name,
-      email: row.email,
-    });
-  }
+model Profile {
+  id       String @id @default(uuid())
+  bio      String
+  user     User   @relation(fields: [userId], references: [id])
+  userId   String @unique
 }
 ```
 
-3. Update your inversify configuration to use the PostgreSQL repository:
+4. Create your repository implementations using Prisma. Example for User repository:
 
 ```typescript
-// In src/infrastructure/config/inversify.config.ts
-import { PostgresUserRepository } from '@infrastructure/repositories/postgres/PostgresUserRepository';
-
-// Then replace the binding:
-container.bind<UserRepository>(TYPES.UserRepository).to(PostgresUserRepository).inSingletonScope();
-```
-
-4. Add environment variables to your `.env` file:
-
-```
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=your_database
-POSTGRES_USER=your_username
-POSTGRES_PASSWORD=your_password
-```
-
-### Using MongoDB
-
-To implement a MongoDB repository:
-
-1. Install required packages:
-```bash
-npm install mongodb
-```
-
-2. Create a MongoDB repository implementation:
-
-```typescript
-// src/infrastructure/repositories/mongo/MongoUserRepository.ts
-import { inject, injectable } from 'inversify';
-import { MongoClient, Collection, Db } from 'mongodb';
-import { User, UserEntity } from '@domain/models/User';
-import { UserRepository } from '@domain/ports/repositories/UserRepository';
-import { TYPES } from '@infrastructure/config/types';
-import { Logger } from '@infrastructure/config/logger';
+// src/infrastructure/repositories/prisma/PrismaUserRepository.ts
+import { inject, injectable } from 'inversify'
+import { PrismaClient } from '@prisma/client'
+import { User, UserEntity } from '@domain/models/User'
+import { UserRepository } from '@domain/ports/repositories/UserRepository'
+import { TYPES } from '@infrastructure/config/types'
+import { Logger } from '@infrastructure/config/logger'
 
 @injectable()
-export class MongoUserRepository implements UserRepository {
-  private client: MongoClient;
-  private db: Db;
-  private collection: Collection;
+export class PrismaUserRepository implements UserRepository {
+  private prisma: PrismaClient
 
   constructor(@inject(TYPES.Logger) private logger: Logger) {
-    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-    const dbName = process.env.MONGODB_DB || 'hexagonal_api';
-    
-    this.client = new MongoClient(uri);
-    this.db = this.client.db(dbName);
-    this.collection = this.db.collection('users');
-    
-    this.connect();
-  }
-
-  private async connect(): Promise<void> {
-    try {
-      await this.client.connect();
-      this.logger.info('Connected to MongoDB');
-    } catch (error) {
-      this.logger.error('MongoDB connection error', { error });
-      throw error;
-    }
+    this.prisma = new PrismaClient()
   }
 
   async findById(id: string): Promise<User | null> {
     try {
-      const document = await this.collection.findOne({ id });
-      if (!document) {
-        return null;
-      }
-      return this.mapToUser(document);
-    } catch (error) {
-      this.logger.error('Error finding user by ID', { error, userId: id });
-      throw error;
-    }
-  }
-
-  async findByEmail(email: string): Promise<User | null> {
-    try {
-      const document = await this.collection.findOne({ email });
-      if (!document) {
-        return null;
-      }
-      return this.mapToUser(document);
-    } catch (error) {
-      this.logger.error('Error finding user by email', { error, email });
-      throw error;
-    }
-  }
-
-  async findAll(): Promise<User[]> {
-    try {
-      const documents = await this.collection.find().toArray();
-      return documents.map(doc => this.mapToUser(doc));
-    } catch (error) {
-      this.logger.error('Error finding all users', { error });
-      throw error;
-    }
-  }
-
-  async save(user: User): Promise<void> {
-    try {
-      await this.collection.insertOne({
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt
-      });
-    } catch (error) {
-      this.logger.error('Error saving user', { error, userId: user.id });
-      throw error;
-    }
-  }
-
-  async update(user: User): Promise<void> {
-    try {
-      await this.collection.updateOne(
-        { id: user.id },
-        {
-          $set: {
-            name: user.name,
-            email: user.email,
-            updatedAt: user.updatedAt
-          }
+      const user = await this.prisma.user.findUnique({
+        where: { id },
+        include: {
+          profile: true,
+          posts: true
         }
-      );
+      })
+
+      return user ? this.mapToUser(user) : null
     } catch (error) {
-      this.logger.error('Error updating user', { error, userId: user.id });
-      throw error;
+      this.logger.error('Error finding user by ID', { error, userId: id })
+      throw error
     }
   }
 
-  async delete(id: string): Promise<void> {
-    try {
-      await this.collection.deleteOne({ id });
-    } catch (error) {
-      this.logger.error('Error deleting user', { error, userId: id });
-      throw error;
-    }
-  }
-
-  private mapToUser(document: any): User {
-    return new UserEntity({
-      id: document.id,
-      name: document.name,
-      email: document.email
-    });
-  }
+  // ... other repository methods ...
 }
 ```
 
-3. Update your inversify configuration:
+5. Set up your database connection:
 
-```typescript
-// In src/infrastructure/config/inversify.config.ts
-import { MongoUserRepository } from '@infrastructure/repositories/mongo/MongoUserRepository';
-
-// Then replace the binding:
-container.bind<UserRepository>(TYPES.UserRepository).to(MongoUserRepository).inSingletonScope();
+```env
+# .env
+DATABASE_URL="postgresql://user:password@localhost:5432/dbname?schema=public"
 ```
 
-4. Add MongoDB connection details to your `.env` file:
+### Database Migrations and Management
 
-```
-MONGODB_URI=mongodb://localhost:27017
-MONGODB_DB=hexagonal_api
-```
+1. Create your first migration:
 
-### Using MySQL
-
-1. Install required packages:
 ```bash
-npm install mysql2
+pnpm prisma migrate dev --name init
 ```
 
-2. Create a MySQL repository implementation:
+2. Generate Prisma Client:
 
-```typescript
-// src/infrastructure/repositories/mysql/MySQLUserRepository.ts
-import { inject, injectable } from 'inversify';
-import mysql from 'mysql2/promise';
-import { User, UserEntity } from '@domain/models/User';
-import { UserRepository } from '@domain/ports/repositories/UserRepository';
-import { TYPES } from '@infrastructure/config/types';
-import { Logger } from '@infrastructure/config/logger';
-
-@injectable()
-export class MySQLUserRepository implements UserRepository {
-  private pool: mysql.Pool;
-
-  constructor(@inject(TYPES.Logger) private logger: Logger) {
-    this.pool = mysql.createPool({
-      host: process.env.MYSQL_HOST,
-      port: parseInt(process.env.MYSQL_PORT || '3306'),
-      database: process.env.MYSQL_DB,
-      user: process.env.MYSQL_USER,
-      password: process.env.MYSQL_PASSWORD,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0
-    });
-  }
-
-  async findById(id: string): Promise<User | null> {
-    try {
-      const [rows] = await this.pool.execute(
-        'SELECT * FROM users WHERE id = ?',
-        [id]
-      );
-
-      if (!Array.isArray(rows) || rows.length === 0) {
-        return null;
-      }
-
-      return this.mapToUser(rows[0]);
-    } catch (error) {
-      this.logger.error('Error finding user by ID', { error, userId: id });
-      throw error;
-    }
-  }
-
-  async findByEmail(email: string): Promise<User | null> {
-    try {
-      const [rows] = await this.pool.execute(
-        'SELECT * FROM users WHERE email = ?',
-        [email]
-      );
-
-      if (!Array.isArray(rows) || rows.length === 0) {
-        return null;
-      }
-
-      return this.mapToUser(rows[0]);
-    } catch (error) {
-      this.logger.error('Error finding user by email', { error, email });
-      throw error;
-    }
-  }
-
-  async findAll(): Promise<User[]> {
-    try {
-      const [rows] = await this.pool.query('SELECT * FROM users');
-      
-      if (!Array.isArray(rows)) {
-        return [];
-      }
-      
-      return rows.map(row => this.mapToUser(row));
-    } catch (error) {
-      this.logger.error('Error finding all users', { error });
-      throw error;
-    }
-  }
-
-  async save(user: User): Promise<void> {
-    try {
-      await this.pool.execute(
-        'INSERT INTO users (id, name, email, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-        [user.id, user.name, user.email, user.createdAt, user.updatedAt]
-      );
-    } catch (error) {
-      this.logger.error('Error saving user', { error, userId: user.id });
-      throw error;
-    }
-  }
-
-  async update(user: User): Promise<void> {
-    try {
-      await this.pool.execute(
-        'UPDATE users SET name = ?, email = ?, updated_at = ? WHERE id = ?',
-        [user.name, user.email, user.updatedAt, user.id]
-      );
-    } catch (error) {
-      this.logger.error('Error updating user', { error, userId: user.id });
-      throw error;
-    }
-  }
-
-  async delete(id: string): Promise<void> {
-    try {
-      await this.pool.execute('DELETE FROM users WHERE id = ?', [id]);
-    } catch (error) {
-      this.logger.error('Error deleting user', { error, userId: id });
-      throw error;
-    }
-  }
-
-  private mapToUser(row: any): User {
-    return new UserEntity({
-      id: row.id,
-      name: row.name,
-      email: row.email
-    });
-  }
-}
-```
-
-### Using Elasticsearch
-
-1. Install required packages:
 ```bash
-npm install @elastic/elasticsearch
+pnpm prisma generate
 ```
 
-2. Create an Elasticsearch repository implementation:
+3. Apply migrations in production:
+
+```bash
+pnpm prisma migrate deploy
+```
+
+4. View and manage your data with Prisma Studio:
+
+```bash
+pnpm prisma studio
+```
+
+### Best Practices with Prisma
+
+1. **Schema Organization**:
+
+   - Use meaningful model names
+   - Define relationships explicitly
+   - Use appropriate field types
+   - Add necessary indexes for performance
+
+2. **Repository Pattern**:
+
+   - Keep Prisma client usage within repositories
+   - Use domain models in your business logic
+   - Map Prisma models to domain entities
+
+3. **Migrations**:
+
+   - Review migration files before applying
+   - Test migrations on staging environment
+   - Keep migration history clean
+   - Use transactions for complex migrations
+
+4. **Performance**:
+
+   - Use `include` and `select` to optimize queries
+   - Implement pagination for large datasets
+   - Set up proper indexes
+   - Monitor query performance
+
+5. **Error Handling**:
+   - Handle Prisma-specific errors appropriately
+   - Implement retry mechanisms for transient failures
+   - Log database operations properly
+
+### Example Service Implementation
 
 ```typescript
-// src/infrastructure/repositories/elasticsearch/ElasticsearchUserRepository.ts
-import { inject, injectable } from 'inversify';
-import { Client } from '@elastic/elasticsearch';
-import { User, UserEntity } from '@domain/models/User';
-import { UserRepository } from '@domain/ports/repositories/UserRepository';
-import { TYPES } from '@infrastructure/config/types';
-import { Logger } from '@infrastructure/config/logger';
-
 @injectable()
-export class ElasticsearchUserRepository implements UserRepository {
-  private client: Client;
-  private index: string = 'users';
+export class UserService implements IUserService {
+  constructor(
+    @inject(TYPES.UserRepository) private userRepository: UserRepository,
+    @inject(TYPES.Logger) private logger: Logger
+  ) {}
 
-  constructor(@inject(TYPES.Logger) private logger: Logger) {
-    this.client = new Client({
-      node: process.env.ELASTICSEARCH_NODE || 'http://localhost:9200',
-      auth: {
-        username: process.env.ELASTICSEARCH_USERNAME || '',
-        password: process.env.ELASTICSEARCH_PASSWORD || ''
-      }
-    });
-    
-    this.initialize();
-  }
-
-  private async initialize(): Promise<void> {
+  async createUser(data: CreateUserDTO): Promise<User> {
     try {
-      const indexExists = await this.client.indices.exists({ index: this.index });
-      
-      if (!indexExists) {
-        await this.client.indices.create({
-          index: this.index,
-          body: {
-            mappings: {
-              properties: {
-                id: { type: 'keyword' },
-                name: { type: 'text' },
-                email: { type: 'keyword' },
-                createdAt: { type: 'date' },
-                updatedAt: { type: 'date' }
-              }
-            }
-          }
-        });
-        this.logger.info(`Created '${this.index}' index in Elasticsearch`);
-      }
+      const user = new UserEntity({
+        id: uuid(),
+        name: data.name,
+        email: data.email,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      })
+
+      await this.userRepository.save(user)
+      return user
     } catch (error) {
-      this.logger.error('Error initializing Elasticsearch', { error });
-      throw error;
+      this.logger.error('Error creating user', { error, data })
+      throw error
     }
   }
 
-  async findById(id: string): Promise<User | null> {
-    try {
-      const response = await this.client.get({
-        index: this.index,
-        id: id
-      });
-      
-      if (!response.found) {
-        return null;
-      }
-      
-      return this.mapToUser(response._source);
-    } catch (error) {
-      if (error.meta?.statusCode === 404) {
-        return null;
-      }
-      this.logger.error('Error finding user by ID', { error, userId: id });
-      throw error;
-    }
-  }
-
-  async findByEmail(email: string): Promise<User | null> {
-    try {
-      const response = await this.client.search({
-        index: this.index,
-        body: {
-          query: {
-            term: { email: email }
-          }
-        }
-      });
-      
-      if (response.hits.total.value === 0) {
-        return null;
-      }
-      
-      return this.mapToUser(response.hits.hits[0]._source);
-    } catch (error) {
-      this.logger.error('Error finding user by email', { error, email });
-      throw error;
-    }
-  }
-
-  async findAll(): Promise<User[]> {
-    try {
-      const response = await this.client.search({
-        index: this.index,
-        body: {
-          query: { match_all: {} }
-        }
-      });
-      
-      return response.hits.hits.map(hit => this.mapToUser(hit._source));
-    } catch (error) {
-      this.logger.error('Error finding all users', { error });
-      throw error;
-    }
-  }
-
-  async save(user: User): Promise<void> {
-    try {
-      await this.client.index({
-        index: this.index,
-        id: user.id,
-        body: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt
-        },
-        refresh: true
-      });
-    } catch (error) {
-      this.logger.error('Error saving user', { error, userId: user.id });
-      throw error;
-    }
-  }
-
-  async update(user: User): Promise<void> {
-    try {
-      await this.client.update({
-        index: this.index,
-        id: user.id,
-        body: {
-          doc: {
-            name: user.name,
-            email: user.email,
-            updatedAt: user.updatedAt
-          }
-        },
-        refresh: true
-      });
-    } catch (error) {
-      this.logger.error('Error updating user', { error, userId: user.id });
-      throw error;
-    }
-  }
-
-  async delete(id: string): Promise<void> {
-    try {
-      await this.client.delete({
-        index: this.index,
-        id: id,
-        refresh: true
-      });
-    } catch (error) {
-      if (error.meta?.statusCode === 404) {
-        return;
-      }
-      this.logger.error('Error deleting user', { error, userId: id });
-      throw error;
-    }
-  }
-
-  private mapToUser(source: any): User {
-    return new UserEntity({
-      id: source.id,
-      name: source.name,
-      email: source.email
-    });
+  async getUserWithPosts(id: string): Promise<User | null> {
+    return this.userRepository.findById(id)
   }
 }
 ```
 
-## Switching Between Implementations
+### Testing with Prisma
 
-The beauty of Hexagonal Architecture is how easy it is to switch implementations:
+1. Set up a test database:
 
-1. Create your repository implementation that adheres to the `UserRepository` interface
-2. Update your inversify.config.ts to bind the new implementation:
-   ```typescript
-   // For development
-   container.bind<UserRepository>(TYPES.UserRepository).to(InMemoryUserRepository).inSingletonScope();
-   
-   // For production
-   container.bind<UserRepository>(TYPES.UserRepository).to(PostgresUserRepository).inSingletonScope();
-   ```
-3. You can even implement environment-based switching:
-   ```typescript
-   if (process.env.NODE_ENV === 'production') {
-     container.bind<UserRepository>(TYPES.UserRepository).to(PostgresUserRepository).inSingletonScope();
-   } else {
-     container.bind<UserRepository>(TYPES.UserRepository).to(InMemoryUserRepository).inSingletonScope();
-   }
-   ```
-
-## Logging with Pino
-
-This boilerplate uses [Pino](https://getpino.io/) for high-performance logging:
-
-### Log Format
-
-Logs are output in JSON format with the following standardized fields:
-- `level`: Numeric log level (10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal)
-- `time`: ISO timestamp
-- `pid`: Process ID
-- `hostname`: Server hostname
-- `msg`: Log message
-- Additional context fields
-
-Example log entry:
-```json
-{"level":30,"time":"2025-04-26T12:34:56.789Z","pid":2376870,"hostname":"myserver","msg":"Request received","requestId":"abcd1234","method":"GET","url":"/api/users"}
+```env
+# .env.test
+DATABASE_URL="postgresql://user:password@localhost:5432/testdb?schema=public"
 ```
 
-### HTTP Request Logging
-
-All HTTP requests are automatically logged with:
-- Unique request ID
-- Method, URL, and status code
-- Request duration
-- IP address and user agent
-- Response status and size
-
-### Usage
-
-The logger is available via dependency injection:
+2. Create test utilities:
 
 ```typescript
-import { inject } from 'inversify';
-import { TYPES } from '@infrastructure/config/types';
-import { Logger } from '@infrastructure/config/logger';
+// test/utils/prisma.ts
+import { PrismaClient } from '@prisma/client'
 
-constructor(@inject(TYPES.Logger) private logger: Logger) {}
+const prisma = new PrismaClient()
 
-public myMethod(): void {
-  this.logger.info('Processing data', { key: 'value', count: 42 });
-  
-  try {
-    // Some operation
-  } catch (error) {
-    this.logger.error('Operation failed', { error, operationId: '123' });
-  }
+export async function cleanDatabase() {
+  const models = Reflect.ownKeys(prisma).filter(key => key[0] !== '_')
+
+  return Promise.all(models.map(model => prisma[model].deleteMany()))
 }
+
+export { prisma }
 ```
 
-### Log Levels
-
-Available log methods:
-- `logger.debug()`: Detailed information for debugging
-- `logger.info()`: Confirmation that things are working as expected
-- `logger.warn()`: Warning about potential issues
-- `logger.error()`: Error events that might still allow the application to continue
-- `logger.fatal()`: Severe error events that may cause the application to terminate
-
-The log level can be set via the `LOG_LEVEL` environment variable (default: 'info').
-
-## API Documentation with Swagger
-
-This boilerplate includes comprehensive API documentation using Swagger/OpenAPI:
-
-- **Interactive Documentation**: Available at `/api-docs` endpoint when running the server
-- **Auto-generated**: Documentation is generated from code annotations
-- **Request/Response Examples**: Full examples to guide API usage
-- **Schema Validation**: Clear definitions of expected data structures
-
-### Using Swagger UI
-
-Once the application is running, navigate to `/api-docs` in your browser to:
-
-- Browse available endpoints grouped by tags
-- View request parameters, body schemas, and responses
-- Try out API calls directly from the browser
-- Inspect response codes and structures
-
-### Documenting New Endpoints
-
-Use JSDoc comments with Swagger annotations to document your controllers:
+3. Example test:
 
 ```typescript
-/**
- * @swagger
- * /api/resource:
- *   get:
- *     summary: Brief description
- *     description: Detailed explanation
- *     tags: [ResourceTag]
- *     responses:
- *       200:
- *         description: Success response description
- */
-@httpGet('/')
-public getResources() {
-  // Method implementation
-}
+import { prisma, cleanDatabase } from '../utils/prisma'
+import { UserService } from '@application/services/UserService'
+
+describe('UserService', () => {
+  beforeEach(async () => {
+    await cleanDatabase()
+  })
+
+  it('should create a user', async () => {
+    const service = new UserService()
+    const user = await service.createUser({
+      name: 'Test User',
+      email: 'test@example.com'
+    })
+
+    const savedUser = await prisma.user.findUnique({
+      where: { id: user.id }
+    })
+
+    expect(savedUser).toBeDefined()
+    expect(savedUser?.email).toBe('test@example.com')
+  })
+})
 ```
 
-## Testing
+### Additional Resources
 
-Run tests with: `npm test`
-
-This boilerplate uses Jest with SWC for fast test execution.
-
-## License
-
-MIT
+- [Prisma Documentation](https://www.prisma.io/docs/)
+- [Prisma Examples](https://github.com/prisma/prisma-examples)
+- [Prisma Schema Reference](https://www.prisma.io/docs/reference/api-reference/prisma-schema-reference)
+- [Prisma Client API](https://www.prisma.io/docs/reference/api-reference/prisma-client-reference)
